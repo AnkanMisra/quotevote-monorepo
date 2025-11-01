@@ -431,6 +431,105 @@ export const GET_USER = gql`
       _followersId
       avatar
       contributorBadge
+      reputation {
+        _id
+        overallScore
+        inviteNetworkScore
+        conductScore
+        activityScore
+        metrics {
+          totalInvitesSent
+          totalInvitesAccepted
+          totalInvitesDeclined
+          averageInviteeReputation
+          totalReportsReceived
+          totalReportsResolved
+          totalUpvotes
+          totalDownvotes
+          totalPosts
+          totalComments
+        }
+        lastCalculated
+      }
+    }
+  }
+`
+
+export const GET_USER_REPUTATION = gql`
+  query getUserReputation($userId: String!) {
+    getUserReputation(userId: $userId) {
+      _id
+      overallScore
+      inviteNetworkScore
+      conductScore
+      activityScore
+      metrics {
+        totalInvitesSent
+        totalInvitesAccepted
+        totalInvitesDeclined
+        averageInviteeReputation
+        totalReportsReceived
+        totalReportsResolved
+        totalUpvotes
+        totalDownvotes
+        totalPosts
+        totalComments
+      }
+      history {
+        date
+        overallScore
+        inviteNetworkScore
+        conductScore
+        activityScore
+        reason
+      }
+      lastCalculated
+    }
+  }
+`
+
+export const GET_USER_INVITES = gql`
+  query getUserInvites($userId: String!, $status: String) {
+    getUserInvites(userId: $userId, status: $status) {
+      _id
+      email
+      status
+      _inviterId {
+        _id
+        username
+        name
+      }
+      _invitedUserId {
+        _id
+        username
+        name
+      }
+      joined
+      createdAt
+    }
+  }
+`
+
+export const GET_USER_REPORTS = gql`
+  query getUserReports($userId: String!, $status: String) {
+    getUserReports(userId: $userId, status: $status) {
+      _id
+      _reporterId {
+        _id
+        username
+        name
+      }
+      _reportedUserId {
+        _id
+        username
+        name
+      }
+      reason
+      description
+      status
+      severity
+      adminNotes
+      createdAt
     }
   }
 `
@@ -666,6 +765,7 @@ export const GET_FEATURED_POSTS = gql`
   }
 `
 
+
 export const LOCAL_QUOTES = gql`
   query localQuotes($near: GeoInput!, $radiusKm: Float, $limit: Int, $offset: Int) {
     localQuotes(near: $near, radiusKm: $radiusKm, limit: $limit, offset: $offset) {
@@ -688,6 +788,16 @@ export const LOCAL_QUOTES = gql`
         avatar
         contributorBadge
       }
+
+export const SEARCH_USERNAMES = gql
+  query searchUsernames($query: String!) {
+    searchUser(queryName: $query) {
+      _id
+      name
+      username
+      avatar
+      contributorBadge
+
     }
   }
 `

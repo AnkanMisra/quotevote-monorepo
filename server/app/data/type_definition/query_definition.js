@@ -34,8 +34,20 @@ type Query {
   " This will query the user "
   user(user_id: String, username: String, creatorId: String): User
 
+  " This will search for users by username or name "
+  searchUser(queryName: String!): [User]
+
   " This will query the user follow info "
   getUserFollowInfo(username: String, filter: String): JSON
+
+  " Get user reputation information "
+  getUserReputation(userId: String!): UserReputation
+
+  " Get user invites "
+  getUserInvites(userId: String!, status: String): [UserInvite]
+
+  " Get user reports "
+  getUserReports(userId: String!, status: String): [UserReport]
 
   " This will query the user messages by Message Room ID"
   messages(messageRoomId: String!): [Message]

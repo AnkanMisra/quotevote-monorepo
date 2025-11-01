@@ -8,7 +8,7 @@ import {
   Button,
 } from '@material-ui/core'
 import { useQuery } from '@apollo/react-hooks'
-import { useSelector, useDispatch } from 'react-redux'
+import { useSelector } from 'react-redux'
 import { useState, useEffect, useMemo } from 'react'
 import SearchIcon from '@material-ui/icons/Search'
 import LocationOnIcon from '@material-ui/icons/LocationOn'
@@ -16,7 +16,7 @@ import DatePicker from 'react-datepicker'
 import 'react-datepicker/dist/react-datepicker.css'
 import format from 'date-fns/format'
 import { jwtDecode } from 'jwt-decode'
-import { GET_TOP_POSTS, GET_FEATURED_POSTS, LOCAL_QUOTES } from '../../graphql/query'
+import { GET_TOP_POSTS, GET_FEATURED_POSTS } from '../../graphql/query'
 import { serializePost } from '../../utils/objectIdSerializer'
 import { fetchLocation, selectLocation, selectIsLoading as selectLocationLoading, selectError as selectLocationError } from '../../store/location'
 import { checkPermission } from '../../utils/geolocationService'
@@ -29,9 +29,16 @@ import PostCard from '../../components/Post/PostCard'
 import LoadingSpinner from '../../components/LoadingSpinner'
 import Tooltip from '@material-ui/core/Tooltip'
 import SearchGuestSections from '../../components/SearchContainer/SearchGuestSections'
+import UsernameResults from '../../components/SearchContainer/UsernameResults'
 import GuestFooter from '../../components/GuestFooter'
 import SEOHead from '../../components/common/SEOHead'
-import { generateCanonicalUrl, generatePaginationUrls, generatePageTitle, generatePageDescription, extractUrlParams } from '../../utils/seo'
+import {
+  generateCanonicalUrl,
+  generatePaginationUrls,
+  generatePageTitle,
+  generatePageDescription,
+  extractUrlParams,
+} from '../../utils/seo'
 
 const useStyles = makeStyles((theme) => ({
   root: {
@@ -77,6 +84,11 @@ const useStyles = makeStyles((theme) => ({
     padding: theme.spacing(1, 2),
     marginBottom: theme.spacing(2),
     border: '1px solid #ddd',
+    transition: 'border-color 0.2s ease',
+  },
+  searchBarUsernameMode: {
+    borderColor: theme.palette.primary.main,
+    boxShadow: `0 0 0 1px ${theme.palette.primary.main}`,
   },
   input: {
     marginLeft: theme.spacing(1),
@@ -336,12 +348,24 @@ export default function SearchPage() {
 
   // Sort order state - 'desc' for newest first (default), 'asc' for oldest first, null for no sort
   const [sortOrder, setSortOrder] = useState('desc')
-  
+
   // Track if user has ever interacted with filters - once true, never show featured posts again
-  const [hasEverInteractedWithFilters, setHasEverInteractedWithFilters] = useState(false)
+  const [
+    hasEverInteractedWithFilters,
+    setHasEverInteractedWithFilters,
+  ] = useState(false)
 
   // Track total count for results
   const [totalCount, setTotalCount] = useState(0)
+
+  // Username search states
+  const [isUsernameSearch, setIsUsernameSearch] = useState(false)
+  const [usernameQuery, setUsernameQuery] = useState('')
+  const [showUsernameResults, setShowUsernameResults] = useState(false)
+  const [selectedUserId, setSelectedUserId] = useState(null)
+
+  // Ref for the search container to handle click outside
+  const searchContainerRef = useRef(null)
 
   // Simple authentication check that doesn't dispatch Redux actions
   const checkAuthentication = () => {
@@ -371,21 +395,6 @@ export default function SearchPage() {
   }, [user])
 
 
-  // Query for local quotes when local filter is active
-  const { data: localQuotesData, loading: localQuotesLoading, error: localQuotesError } = useQuery(LOCAL_QUOTES, {
-    variables: {
-      near: userLocation ? {
-        latitude: userLocation.lat,
-        longitude: userLocation.lng,
-      } : null,
-      radiusKm: 10, // Default 10km radius
-      limit: 50,
-      offset: 0,
-    },
-    skip: !activeFilters.local || !userLocation,
-    fetchPolicy: 'network-only',
-  })
-
   const { data: featuredData, refetch: refetchFeatured, loading: featuredLoading } = useQuery(GET_FEATURED_POSTS, {
     variables: {
       limit: 10,
@@ -410,6 +419,18 @@ export default function SearchPage() {
     nextFetchPolicy: 'cache-first',
   })
 
+  // Username search query
+  const {
+    data: usernameData,
+    loading: usernameLoading,
+    error: usernameError,
+  } = useQuery(SEARCH_USERNAMES, {
+    variables: { query: usernameQuery },
+    skip: !isUsernameSearch || !usernameQuery || usernameQuery.length === 0,
+    fetchPolicy: 'cache-and-network',
+    errorPolicy: 'all',
+  })
+
   // Auto-show results for guest mode and when filters are active
   useEffect(() => {
     if (isGuestMode && !showResults) {
@@ -424,18 +445,68 @@ export default function SearchPage() {
     }
   }, [activeFilters, sortOrder, dateRangeFilter])
 
+  // Reset username search and selected user when search key changes or is cleared
+  useEffect(() => {
+    if (!searchKey || searchKey.trim() === '') {
+      setIsUsernameSearch(false)
+      setUsernameQuery('')
+      setShowUsernameResults(false)
+      setSelectedUserId(null)
+    }
+  }, [searchKey])
+
+  // Handle click outside to hide username results
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (
+        searchContainerRef.current &&
+        !searchContainerRef.current.contains(event.target)
+      ) {
+        setShowUsernameResults(false)
+      }
+    }
+
+    if (showUsernameResults) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside)
+      }
+    }
+  }, [showUsernameResults])
 
   const handleSearch = (e) => {
     e.preventDefault()
     // Mark that user has interacted with filters (search is also a filter interaction)
     setHasEverInteractedWithFilters(true)
-    
+
     setShowResults(true)
+  }
+
+  // New handler for search input changes to detect @ symbol
+  const handleSearchInputChange = (e) => {
+    const value = e.target.value
+    setSearchKey(value)
+
+    // Check if user is typing @ for username search
+    if (value.startsWith('@')) {
+      const query = value.substring(1) // Remove @ symbol
+      setIsUsernameSearch(true)
+      setUsernameQuery(query)
+      setShowUsernameResults(query.length > 0) // Only show results if there's text after @
+      // Clear selected user when in username search mode
+      setSelectedUserId(null)
+    } else {
+      setIsUsernameSearch(false)
+      setUsernameQuery('')
+      setShowUsernameResults(false)
+      // Clear selected user when not in username search mode
+      setSelectedUserId(null)
+    }
   }
 
   const handleFriendsFilter = () => {
     console.log('Friends filter clicked, current state:', activeFilters.friends)
-    
+
     // Mark that user has interacted with filters
     setHasEverInteractedWithFilters(true)
 
@@ -464,7 +535,7 @@ export default function SearchPage() {
     )
     // Mark that user has interacted with filters
     setHasEverInteractedWithFilters(true)
-    
+
     setActiveFilters((prev) => ({
       ...prev,
       interactions: !prev.interactions,
@@ -520,7 +591,7 @@ export default function SearchPage() {
     console.log('Sort order toggle clicked, current state:', sortOrder)
     // Mark that user has interacted with filters
     setHasEverInteractedWithFilters(true)
-    
+
     setSortOrder((prev) => {
       const newSortOrder = prev === 'desc' ? 'asc' : 'desc'
       console.log('Sort order changing from', prev, 'to', newSortOrder)
@@ -539,7 +610,7 @@ export default function SearchPage() {
     const [startDate, endDate] = dateRange
     // Mark that user has interacted with filters
     setHasEverInteractedWithFilters(true)
-    
+
     setDateRangeFilter({ startDate, endDate })
     if (startDate && endDate) {
       setIsCalendarVisible(false)
@@ -558,6 +629,17 @@ export default function SearchPage() {
     setFocusedInput(null)
   }
 
+  // Helper function to determine if we should show the landing page for guest users
+  const shouldShowGuestLandingPage = () => {
+    if (!isGuestMode) return false
+    
+    const { page } = extractUrlParams({ search: window.location.search })
+    const hasPageParam = Boolean(page)
+    
+    // Show landing page only when no search, no filters, no interactions, and no page params
+    return !searchKey.trim() && !hasActiveFilters() && !hasEverInteractedWithFilters && !hasPageParam
+  }
+
   // Helper function to check if any filters are active
   const hasActiveFilters = () => {
     return (
@@ -568,8 +650,6 @@ export default function SearchPage() {
       sortOrder === 'asc' // Consider 'asc' (oldest first) as an active filter since 'desc' is default
     )
   }
-
-
 
   const featuredPosts = useMemo(() => {
     return (featuredData?.featuredPosts?.entities || []).map((post) =>
@@ -615,15 +695,19 @@ export default function SearchPage() {
     sortOrder,
     friendsOnly: activeFilters.friends,
     interactions: activeFilters.interactions,
-    startDateRange: dateRangeFilter.startDate ? format(dateRangeFilter.startDate, 'yyyy-MM-dd') : '',
-    endDateRange: dateRangeFilter.endDate ? format(dateRangeFilter.endDate, 'yyyy-MM-dd') : '',
+    startDateRange: dateRangeFilter.startDate
+      ? format(dateRangeFilter.startDate, 'yyyy-MM-dd')
+      : '',
+    endDateRange: dateRangeFilter.endDate
+      ? format(dateRangeFilter.endDate, 'yyyy-MM-dd')
+      : '',
   })
 
   const pageTitle = generatePageTitle(
     'Search Posts - QuoteVote',
     urlParams.page,
     1, // We don't have total pages here, but it's not critical for title
-    searchKey
+    searchKey,
   )
 
   const pageDescription = generatePageDescription(
@@ -632,7 +716,7 @@ export default function SearchPage() {
     1,
     searchKey,
     0, // We don't have total count here
-    urlParams.pageSize
+    urlParams.pageSize,
   )
 
   return (
@@ -672,18 +756,26 @@ export default function SearchPage() {
             </Typography>
           </Grid>
 
-          <Grid item style={{ width: '100%', maxWidth: 600 }}>
+          <Grid
+            item
+            style={{ width: '100%', maxWidth: 600, position: 'relative' }}
+            ref={searchContainerRef}
+          >
             <Paper
               component="form"
-              className={classes.searchBar}
+              className={`${classes.searchBar} ${
+                isUsernameSearch ? classes.searchBarUsernameMode : ''
+              }`}
               onSubmit={handleSearch}
             >
               <InputBase
                 className={classes.input}
-                placeholder="Search..."
+                placeholder={
+                  isUsernameSearch ? 'Search usernames...' : 'Search...'
+                }
                 inputProps={{ 'aria-label': 'search' }}
                 value={searchKey}
-                onChange={(e) => setSearchKey(e.target.value)}
+                onChange={handleSearchInputChange}
               />
               <IconButton
                 type="submit"
@@ -693,8 +785,31 @@ export default function SearchPage() {
                 <SearchIcon />
               </IconButton>
             </Paper>
+
+            {/* Username search results dropdown */}
+            {showUsernameResults && (
+              <UsernameResults
+                users={usernameData?.searchUser || []}
+                loading={usernameLoading}
+                error={usernameError}
+                query={usernameQuery}
+                onUserSelect={(user) => {
+                  // Set search to show posts from selected user
+                  setSearchKey(`@${user.username}`)
+                  setSelectedUserId(user._id)
+                  setIsUsernameSearch(false)
+                  setShowUsernameResults(false)
+                  setShowResults(true)
+                  setHasEverInteractedWithFilters(true)
+                }}
+              />
+            )}
           </Grid>
-          <Grid item className={classes.iconsContainer} style={{ width: '100%' }}>
+          <Grid
+            item
+            className={classes.iconsContainer}
+            style={{ width: '100%' }}
+          >
             <Tooltip
               title={
                 user && user._id
@@ -775,12 +890,14 @@ export default function SearchPage() {
                   }`}
                   onClick={handleSortOrderToggle}
                 >
-                  <span style={{
-                    fontSize: '1.5rem',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    position: 'relative',
-                  }}>
+                  <span
+                    style={{
+                      fontSize: '1.5rem',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      position: 'relative',
+                    }}
+                  >
                     {sortOrder === 'asc' && '⏳'}
                     {sortOrder === 'desc' && '⌛'}
                   </span>
@@ -886,266 +1003,308 @@ export default function SearchPage() {
           {/* Filter Rules Display - Always show after any filter interaction */}
           {showResults && hasEverInteractedWithFilters && (
             <Grid item style={{ width: '100%', marginTop: 16 }}>
-              <Paper style={{ 
-                padding: 20, 
-                backgroundColor: '#f8f9fa', 
-                border: '1px solid #e0e0e0',
-                borderRadius: '8px',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-              }}>
-                <Typography variant="h6" style={{ marginBottom: 12, color: '#333', fontWeight: 600 }}>
+              <Paper
+                style={{
+                  padding: 20,
+                  backgroundColor: '#f8f9fa',
+                  border: '1px solid #e0e0e0',
+                  borderRadius: '8px',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                }}
+              >
+                <Typography
+                  variant="h6"
+                  style={{ marginBottom: 12, color: '#333', fontWeight: 600 }}
+                >
                   📋 Current Filter Rules
                 </Typography>
-                
-                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: 12, justifyContent: 'center' }}>
+
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: '12px',
+                    marginBottom: 12,
+                    justifyContent: 'center',
+                  }}
+                >
                   {/* Friends Filter */}
-                  <div style={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    padding: '8px 12px', 
-                    backgroundColor: activeFilters.friends ? '#e3f2fd' : '#f5f5f5',
-                    borderRadius: '20px',
-                    border: activeFilters.friends ? '1px solid #2196f3' : '1px solid #e0e0e0'
-                  }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '8px 12px',
+                      backgroundColor: activeFilters.friends
+                        ? '#e3f2fd'
+                        : '#f5f5f5',
+                      borderRadius: '20px',
+                      border: activeFilters.friends
+                        ? '1px solid #2196f3'
+                        : '1px solid #e0e0e0',
+                    }}
+                  >
                     <span style={{ marginRight: '6px' }}>👥</span>
-                    <Typography variant="body2" style={{ 
-                      color: activeFilters.friends ? '#1976d2' : '#666',
-                      fontWeight: activeFilters.friends ? 600 : 400
-                    }}>
+                    <Typography
+                      variant="body2"
+                      style={{
+                        color: activeFilters.friends ? '#1976d2' : '#666',
+                        fontWeight: activeFilters.friends ? 600 : 400,
+                      }}
+                    >
                       {activeFilters.friends ? 'Friends Only' : 'All Posts'}
                     </Typography>
                   </div>
 
                   {/* Interactions Filter */}
-                  <div style={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    padding: '8px 12px', 
-                    backgroundColor: activeFilters.interactions ? '#e3f2fd' : '#f5f5f5',
-                    borderRadius: '20px',
-                    border: activeFilters.interactions ? '1px solid #2196f3' : '1px solid #e0e0e0'
-                  }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '8px 12px',
+                      backgroundColor: activeFilters.interactions
+                        ? '#e3f2fd'
+                        : '#f5f5f5',
+                      borderRadius: '20px',
+                      border: activeFilters.interactions
+                        ? '1px solid #2196f3'
+                        : '1px solid #e0e0e0',
+                    }}
+                  >
                     <span style={{ marginRight: '6px' }}>🧲</span>
-                    <Typography variant="body2" style={{ 
-                      color: activeFilters.interactions ? '#1976d2' : '#666',
-                      fontWeight: activeFilters.interactions ? 600 : 400
-                    }}>
-                      {activeFilters.interactions ? 'By Interactions' : 'By Date'}
+                    <Typography
+                      variant="body2"
+                      style={{
+                        color: activeFilters.interactions ? '#1976d2' : '#666',
+                        fontWeight: activeFilters.interactions ? 600 : 400,
+                      }}
+                    >
+                      {activeFilters.interactions
+                        ? 'By Interactions'
+                        : 'By Date'}
                     </Typography>
                   </div>
 
                   {/* Sort Order */}
-                  <div style={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center',
-                    padding: '8px 12px', 
-                    backgroundColor: sortOrder === 'asc' ? '#e3f2fd' : '#f5f5f5',
-                    borderRadius: '20px',
-                    border: sortOrder === 'asc' ? '1px solid #2196f3' : '1px solid #e0e0e0',
-                    minWidth: '120px'
-                  }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: '8px 12px',
+                      backgroundColor:
+                        sortOrder === 'asc' ? '#e3f2fd' : '#f5f5f5',
+                      borderRadius: '20px',
+                      border:
+                        sortOrder === 'asc'
+                          ? '1px solid #2196f3'
+                          : '1px solid #e0e0e0',
+                      minWidth: '120px',
+                    }}
+                  >
                     <span style={{ marginRight: '6px' }}>
                       {sortOrder === 'asc' ? '⏳' : '⌛'}
                     </span>
-                    <Typography variant="body2" style={{ 
-                      color: sortOrder === 'asc' ? '#1976d2' : '#666',
-                      fontWeight: sortOrder === 'asc' ? 600 : 400,
-                      textAlign: 'center'
-                    }}>
+                    <Typography
+                      variant="body2"
+                      style={{
+                        color: sortOrder === 'asc' ? '#1976d2' : '#666',
+                        fontWeight: sortOrder === 'asc' ? 600 : 400,
+                        textAlign: 'center',
+                      }}
+                    >
                       {sortOrder === 'asc' ? 'Oldest First' : 'Newest First'}
                     </Typography>
                   </div>
 
                   {/* Date Range */}
                   {(dateRangeFilter.startDate || dateRangeFilter.endDate) && (
-                    <div style={{ 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      padding: '8px 12px', 
-                      backgroundColor: '#e3f2fd',
-                      borderRadius: '20px',
-                      border: '1px solid #2196f3'
-                    }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        padding: '8px 12px',
+                        backgroundColor: '#e3f2fd',
+                        borderRadius: '20px',
+                        border: '1px solid #2196f3',
+                      }}
+                    >
                       <span style={{ marginRight: '6px' }}>📅</span>
-                      <Typography variant="body2" style={{ 
-                        color: '#1976d2',
-                        fontWeight: 600
-                      }}>
-                        {dateRangeFilter.startDate && dateRangeFilter.endDate 
-                          ? `${format(dateRangeFilter.startDate, 'MMM d')} - ${format(dateRangeFilter.endDate, 'MMM d, yyyy')}`
-                          : dateRangeFilter.startDate 
-                          ? `From ${format(dateRangeFilter.startDate, 'MMM d, yyyy')}`
-                          : `Until ${format(dateRangeFilter.endDate, 'MMM d, yyyy')}`
-                        }
+                      <Typography
+                        variant="body2"
+                        style={{
+                          color: '#1976d2',
+                          fontWeight: 600,
+                        }}
+                      >
+                        {dateRangeFilter.startDate && dateRangeFilter.endDate
+                          ? `${format(
+                              dateRangeFilter.startDate,
+                              'MMM d',
+                            )} - ${format(
+                              dateRangeFilter.endDate,
+                              'MMM d, yyyy',
+                            )}`
+                          : dateRangeFilter.startDate
+                          ? `From ${format(
+                              dateRangeFilter.startDate,
+                              'MMM d, yyyy',
+                            )}`
+                          : `Until ${format(
+                              dateRangeFilter.endDate,
+                              'MMM d, yyyy',
+                            )}`}
                       </Typography>
                     </div>
                   )}
                 </div>
 
                 {/* Summary Text */}
-                <Typography variant="body2" style={{ color: '#666', lineHeight: 1.5 }}>
-                  {activeFilters.friends && 'Showing posts from people you follow. '}
-                  {activeFilters.interactions && 'Posts are sorted by total interactions (comments + votes + quotes). '}
-                  {sortOrder === 'asc' && 'Posts are sorted by creation date (oldest to newest). '}
-                  {sortOrder === 'desc' && 'Posts are sorted by creation date (newest to oldest). '}
-                  {dateRangeFilter.startDate && dateRangeFilter.endDate && 
-                    `Showing posts from ${format(dateRangeFilter.startDate, 'MMM d, yyyy')} to ${format(dateRangeFilter.endDate, 'MMM d, yyyy')}. `
-                  }
-                  {!activeFilters.friends && !activeFilters.interactions && sortOrder === 'desc' && !dateRangeFilter.startDate && !dateRangeFilter.endDate &&
-                    'Showing all posts sorted by newest first (default).'
-                  }
+                <Typography
+                  variant="body2"
+                  style={{ color: '#666', lineHeight: 1.5 }}
+                >
+                  {activeFilters.friends &&
+                    'Showing posts from people you follow. '}
+                  {activeFilters.interactions &&
+                    'Posts are sorted by total interactions (comments + votes + quotes). '}
+                  {sortOrder === 'asc' &&
+                    'Posts are sorted by creation date (oldest to newest). '}
+                  {sortOrder === 'desc' &&
+                    'Posts are sorted by creation date (newest to oldest). '}
+                  {dateRangeFilter.startDate &&
+                    dateRangeFilter.endDate &&
+                    `Showing posts from ${format(
+                      dateRangeFilter.startDate,
+                      'MMM d, yyyy',
+                    )} to ${format(dateRangeFilter.endDate, 'MMM d, yyyy')}. `}
+                  {!activeFilters.friends &&
+                    !activeFilters.interactions &&
+                    sortOrder === 'desc' &&
+                    !dateRangeFilter.startDate &&
+                    !dateRangeFilter.endDate &&
+                    'Showing all posts sorted by newest first (default).'}
                 </Typography>
               </Paper>
             </Grid>
           )}
 
           {/* Show featured posts only when no filters are active, no search, and user has never interacted with filters */}
-          {isGuestMode && !searchKey.trim() && !hasActiveFilters() && !hasEverInteractedWithFilters && (
-            <>
-              {featuredData?.featuredPosts ? (
-                featuredPosts.length > 0 ? (
-                  <Grid item style={{ width: '100%', maxWidth: '800px' }}>
-                    <Typography variant="h6" style={{ marginBottom: '1rem', textAlign: 'center' }}>
-                      Featured Posts
-                    </Typography>
-                    <Carousel navButtonsAlwaysVisible autoplay={false}>
-                      {createCarouselItems}
-                    </Carousel>
-                  </Grid>
-                ) : (
-                  <div style={{ textAlign: 'center', padding: '2rem' }}>
-                    <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>
-                      ⭐
+          {isGuestMode &&
+            !searchKey.trim() &&
+            !hasActiveFilters() &&
+            !hasEverInteractedWithFilters && (
+              <>
+                {featuredData?.featuredPosts ? (
+                  featuredPosts.length > 0 ? (
+                    <Grid item style={{ width: '100%', maxWidth: '800px' }}>
+                      <Typography
+                        variant="h6"
+                        style={{ marginBottom: '1rem', textAlign: 'center' }}
+                      >
+                        Featured Posts
+                      </Typography>
+                      <Carousel navButtonsAlwaysVisible autoplay={false}>
+                        {createCarouselItems}
+                      </Carousel>
+                    </Grid>
+                  ) : (
+                    <div style={{ textAlign: 'center', padding: '2rem' }}>
+                      <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>
+                        ⭐
+                      </div>
+                      <Typography variant="h6" style={{ color: '#666' }}>
+                        No featured posts found
+                      </Typography>
+                      <Typography
+                        variant="body2"
+                        style={{ color: '#999', marginTop: '0.5rem' }}
+                      >
+                        Check back later for featured content
+                      </Typography>
                     </div>
-                    <Typography variant="h6" style={{ color: '#666' }}>
-                      No featured posts found
+                  )
+                ) : featuredLoading ? (
+                  <div style={{ textAlign: 'center', padding: '2rem' }}>
+                    <LoadingSpinner size={60} />
+                    <Typography
+                      variant="h6"
+                      style={{ marginTop: '1rem', color: '#666' }}
+                    >
+                      Loading featured posts...
                     </Typography>
                     <Typography
                       variant="body2"
-                      style={{ color: '#999', marginTop: '0.5rem' }}
+                      style={{ marginTop: '0.5rem', color: '#999' }}
                     >
-                      Check back later for featured content
+                      Please wait while we fetch featured content
                     </Typography>
                   </div>
-                )
-              ) : featuredLoading ? (
-                <div style={{ textAlign: 'center', padding: '2rem' }}>
-                  <LoadingSpinner size={60} />
-                  <Typography
-                    variant="h6"
-                    style={{ marginTop: '1rem', color: '#666' }}
-                  >
-                    Loading featured posts...
-                  </Typography>
-                  <Typography
-                    variant="body2"
-                    style={{ marginTop: '0.5rem', color: '#999' }}
-                  >
-                    Please wait while we fetch featured content
-                  </Typography>
-                </div>
-              ) : null}
-            </>
-          )}
+                ) : null}
+              </>
+            )}
 
           {/* Show database results when authenticated, searching, any filter is active, user has ever interacted with filters, */}
           {/* OR when the URL contains a page parameter. This ensures back-navigation with ?page works. */}
           {(() => {
-            const { page } = extractUrlParams({ search: window.location.search })
+            const { page } = extractUrlParams({
+              search: window.location.search,
+            })
             const hasPageParam = window.location.search.includes('page=')
-            const shouldShowDbResults = !isGuestMode || searchKey.trim() || hasActiveFilters() || hasEverInteractedWithFilters || hasPageParam
+            const shouldShowDbResults =
+              !isGuestMode ||
+              searchKey.trim() ||
+              hasActiveFilters() ||
+              hasEverInteractedWithFilters ||
+              hasPageParam
             return shouldShowDbResults
           })() && (
             <>
               {/* Total Count Display */}
               {totalCount > 0 && (
-                <Grid item style={{ width: '100%', textAlign: 'center', marginTop: 16 }}>
-                  <Typography variant="h6" style={{ color: '#666', fontWeight: 500 }}>
-                    {totalCount.toLocaleString()} {totalCount === 1 ? 'result' : 'results'} found
+                <Grid
+                  item
+                  style={{ width: '100%', textAlign: 'center', marginTop: 16 }}
+                >
+                  <Typography
+                    variant="h6"
+                    style={{ color: '#666', fontWeight: 500 }}
+                  >
+                    {totalCount.toLocaleString()}{' '}
+                    {totalCount === 1 ? 'result' : 'results'} found
                   </Typography>
                 </Grid>
               )}
-              
+
               <Grid item xs={12} className={classes.list}>
-                {activeFilters.local && userLocation ? (
-                  <>
-                    {isLocationLoading && (
-                      <Typography variant="body1" style={{ padding: '20px', textAlign: 'center' }}>
-                        Getting your location...
-                      </Typography>
-                    )}
-                    {localQuotesError && (
-                      <Typography variant="body1" color="error" style={{ padding: '20px', textAlign: 'center' }}>
-                        Error loading local quotes: {localQuotesError.message}
-                      </Typography>
-                    )}
-                    {localQuotesLoading && !isLocationLoading && (
-                      <LoadingSpinner />
-                    )}
-                    {localQuotesData && localQuotesData.localQuotes && (
-                      <div style={{ padding: '20px' }}>
-                        <Typography variant="h6" gutterBottom>
-                          {localQuotesData.localQuotes.length} quotes near you
-                        </Typography>
-                        {localQuotesData.localQuotes.length === 0 ? (
-                          <Typography variant="body1" color="textSecondary" style={{ marginTop: '20px' }}>
-                            No quotes found nearby. Try expanding your search radius or check back later.
-                          </Typography>
-                        ) : (
-                          <div>
-                            {localQuotesData.localQuotes.map((quote) => (
-                              <Paper key={quote._id} style={{ padding: '16px', marginBottom: '12px' }}>
-                                <Typography variant="body1" gutterBottom>
-                                  "{quote.quote}"
-                                </Typography>
-                                <Typography variant="caption" color="textSecondary">
-                                  by {quote.user?.username || 'Anonymous'}
-                                </Typography>
-                                {quote.placeLabel && (
-                                  <div style={{ marginTop: '8px' }}>
-                                    <LocationBadge 
-                                      placeLabel={quote.placeLabel}
-                                      distance={quote.distanceFromUser}
-                                      variant="chip"
-                                      size="small"
-                                    />
-                                  </div>
-                                )}
-                              </Paper>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <PaginatedPostsList
-                    searchKey={searchKey}
-                    startDateRange={dateRangeFilter.startDate ? format(dateRangeFilter.startDate, 'yyyy-MM-dd') : ''}
-                    endDateRange={dateRangeFilter.endDate ? format(dateRangeFilter.endDate, 'yyyy-MM-dd') : ''}
-                    friendsOnly={(user && user._id) ? activeFilters.friends : false}
-                    interactions={activeFilters.interactions}
-                    sortOrder={sortOrder === 'asc' ? sortOrder : undefined}
-                    defaultPageSize={20}
-                    pageParam="page"
-                    pageSizeParam="page_size"
-                    cols={1}
-                    showPageInfo={true}
-                    showFirstLast={true}
-                    maxVisiblePages={5}
-                    onTotalCountChange={setTotalCount}
-                  />
-                )}
+                <PaginatedPostsList
+                  searchKey={searchKey}
+                  startDateRange={dateRangeFilter.startDate ? format(dateRangeFilter.startDate, 'yyyy-MM-dd') : ''}
+                  endDateRange={dateRangeFilter.endDate ? format(dateRangeFilter.endDate, 'yyyy-MM-dd') : ''}
+                  friendsOnly={(user && user._id) ? activeFilters.friends : false}
+                  interactions={activeFilters.interactions}
+                  sortOrder={sortOrder === 'asc' ? sortOrder : undefined}
+                  defaultPageSize={20}
+                  pageParam="page"
+                  pageSizeParam="page_size"
+                  cols={1}
+                  showPageInfo={true}
+                  showFirstLast={true}
+                  maxVisiblePages={5}
+                  onTotalCountChange={setTotalCount}
+                />
               </Grid>
             </>
           )}
 
           {/* Show landing page content only when no filters are active and user has never interacted with filters */}
-          {isGuestMode && !hasActiveFilters() && !hasEverInteractedWithFilters && <SearchGuestSections />}
+          {isGuestMode &&
+            !hasActiveFilters() &&
+            !hasEverInteractedWithFilters && <SearchGuestSections />}
 
           {/* Guest Footer Section - only show when no filters are active and user has never interacted with filters */}
-          {isGuestMode && !hasActiveFilters() && !hasEverInteractedWithFilters && <GuestFooter />}
+          {isGuestMode &&
+            !hasActiveFilters() &&
+            !hasEverInteractedWithFilters && <GuestFooter />}
         </Grid>
       </div>
 
@@ -1171,7 +1330,7 @@ export default function SearchPage() {
         }}
       />
     </ErrorBoundary>
-  );
+  )
 }
 
 /* Add this to the bottom of the file (outside the component) for responsive flex direction */

@@ -10,3 +10,4 @@ export * from './StripeCustomerInput';
 export * from './RequestUserAccessInput';
 export * from './CardPaymentMethodInput';
 export * from './ReactionInput';
+export * from './ReportUserInput';
